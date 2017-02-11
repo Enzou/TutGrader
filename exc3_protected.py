@@ -176,6 +176,7 @@ class ExerciseHandler:
     def __init__(self, wd):
         code = self._read_sourcecode(wd)
         self.tasks = self._extract_tasks(code)
+        self.asm = AsmInterpreter(code)
 
     @staticmethod
     def get_exercise_name():
@@ -267,15 +268,14 @@ class ExerciseHandler:
         else:
             return 0, ["Invalid task"]
 
-    @staticmethod
-    def _grade_task1(lines):
+    def _grade_task1(self, lines):
         max_score = 15
         # segments = {}
         # seg_name = None
         # seg_bytes = []
 
-        asm = AsmInterpreter(lines)
-        segments = asm.parse_segment_descriptors()
+        # asm = AsmInterpreter(lines)
+        segments = self.asm.parse_segment_descriptors(lines)
 
         # for l in lines:
         #     if "equ $-gdt" in l:

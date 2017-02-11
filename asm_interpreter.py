@@ -6,12 +6,12 @@ import ast
 
 
 def _parse_number(val):
-    if val.endswith("b"):  # parse binary
+    if val.startswith("0x"):  # parse hex
+        val = int(val, 16)
+    elif val.endswith("b"):  # parse binary
         if '_' in val:
             val = val.replace('_', '')
         val = int(val.replace('b', ''), 2)
-    elif val.startswith("0x"):  # parse hex
-        val = int(val, 16)
     else:  # decimal
         val = int("".join(itertools.takewhile(str.isdigit, val)))
     return val
@@ -51,10 +51,13 @@ def _eval_statement(stmt, labels):
                         ctx=node.ctx),
                 node)
 
-    node = ast.parse(stmt, mode="eval")
+    node = ast.parse(stmt.strip(), mode="eval")
     # resolve labels to their numerical value
     node = ResolveLabel(labels).visit(node)
-    val = ast.literal_eval(node)
+    try:
+        val = ast.literal_eval(node)
+    except Exception as e:
+        a = 5
 
     return val
 
@@ -63,7 +66,7 @@ def _determine_opsize(dst, src):
     return 4
 
 
-def _parse_descriptor_defines(lines, labels={}):
+def _parse_descriptor_defines(lines, labels=None):
     segbytes = bytearray()
     for l in lines:
         segbytes += _parse_descr_bytes(*_tokenize_line(l), labels)
@@ -259,14 +262,18 @@ class AsmInterpreter:
                 val = nr
             elif 'equ' in l:
                 # extract label
-                idx = l.index(' ')
+                idx = l.index(' equ ')
                 label = l[:idx]
 
                 # parse definition
-                idx = l.index('equ ') + 4
+                idx += 5
                 stmt = l[idx:].replace('$', str(nr))
                 val = _eval_statement(stmt, labels)
-                # test = ast.parse(decl)
+            elif 'db' in l:
+                idx = l.index('db')
+                if idx > 1:
+                    label = l[:idx].strip()
+                    val = nr
 
             if label:
                 labels[label] = val
@@ -299,11 +306,13 @@ class AsmInterpreter:
             l = _strip_line(l)
             if "equ $-gdt" in l:
                 if seg_name:
-                    segments[seg_name] = _parse_descriptor_defines(seg_bytes)
+                    segments[seg_name] = _parse_descriptor_defines(
+                        seg_bytes, self.labels)
                 seg_name = l[:l.index(" ")]
                 seg_bytes.clear()
             elif "gdt_end:" in l:
-                segments[seg_name] = _parse_descriptor_defines(seg_bytes)
+                segments[seg_name] = _parse_descriptor_defines(
+                    seg_bytes, self.labels)
             elif seg_name:
                 seg_bytes.append(l)
 
@@ -358,7 +367,7 @@ class AsmInterpreter:
         try:
             if any((c in '+-*/') for c in src):
                 try:
-                    val = ast.literal_eval(src)
+                    val = eval(src)
                 except Exception as e:
                     logging.warning("couldn't evaluate expression '{}'"
                                     .format(src))
