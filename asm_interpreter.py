@@ -2,6 +2,7 @@ import logging
 import re
 import itertools
 import struct
+import ast
 
 
 def _parse_number(val):
@@ -37,6 +38,25 @@ def _tokenize_line(line):
     params = [p.strip() for p in line.replace(cmd, '').split(',')]
 
     return cmd, params
+
+
+def _eval_statement(stmt, labels):
+    class ResolveLabel(ast.NodeTransformer):
+        def __init__(self, labels):
+            self.labels = labels
+
+        def visit_Name(self, node):
+            return ast.copy_location(
+                ast.Num(n=self.labels.get(node.id, node.id),
+                        ctx=node.ctx),
+                node)
+
+    node = ast.parse(stmt, mode="eval")
+    # resolve labels to their numerical value
+    node = ResolveLabel(labels).visit(node)
+    val = ast.literal_eval(node)
+
+    return val
 
 
 def _determine_opsize(dst, src):
@@ -91,13 +111,13 @@ def _parse_segment_descriptor(segbytes):
         "seglimit": seglimit,
         "base_addr": baseaddr,
         "type": flags & 0x0f,  # segment type
-        "s": bool(flags & 0x10),   # descr type 0 = system; 1 = code or data
-        "dpl": (flags & 0x60) >> 5,   # descriptor privilege level
-        "p": bool(flags & 0x80),     # segment present
-        "avl": bool(misc & 0x10),    # available for use by system software
-        "l": bool(misc & 0x20),      # 64-bit code segment (IA-32e mode only)
+        "s": bool(flags & 0x10),  # descr type 0 = system; 1 = code or data
+        "dpl": (flags & 0x60) >> 5,  # descriptor privilege level
+        "p": bool(flags & 0x80),  # segment present
+        "avl": bool(misc & 0x10),  # available for use by system software
+        "l": bool(misc & 0x20),  # 64-bit code segment (IA-32e mode only)
         "db": bool(misc & 0x40),  # def op size (0 = 16-bit, 1 = 32 bit seg)
-        "g": bool(misc & 0x80)       # granularity
+        "g": bool(misc & 0x80)  # granularity
     }
 
 
@@ -125,12 +145,12 @@ def _parse_interrupt_descriptor(intbytes):
 
     return {
         "offset": ofs1 + (ofs2 << 16),
-        "segment": seg_sel,         # segment
-        "dummy": dummy,             # only 0s
-        "int_type": int_type,       # fix for all interrupt gates
-        "d": (flags & 0x08) >> 3,    # size of gate, 1 = 32 bits, 0 = 16 bits
-        "dpl": (flags & 0x60) >> 4,        # descriptor privilege level
-        "p": bool(flags * 0x80)     # present flag
+        "segment": seg_sel,  # segment
+        "dummy": dummy,  # only 0s
+        "int_type": int_type,  # fix for all interrupt gates
+        "d": (flags & 0x08) >> 3,  # size of gate, 1 = 32 bits, 0 = 16 bits
+        "dpl": (flags & 0x60) >> 4,  # descriptor privilege level
+        "p": bool(flags * 0x80)  # present flag
     }
 
 
@@ -222,47 +242,36 @@ class Registers:
 
 
 class AsmInterpreter:
-    def __init__(self, code, labels={}):
+    def __init__(self, code, labels=None):
         self.lines = code
         # self.regs = self._init_registers()
         self.regs = Registers()
-        self.labels = labels
-
-    @staticmethod
-    def _init_registers():
-        return {
-            "eax": 0,
-            "ebx": 0,
-            "ecx": 0,
-            "edx": 0,
-            "esi": 0,
-            "edi": 0,
-            "ebp": 0,
-            "esp": 0,
-
-            # segments
-            "cs": 0,
-            "ds": 0,
-            "es": 0,
-            "fs": 0,
-            "gs": 0,
-            "ss": 0,
-
-            # special
-            "cr0": 0,
-            "cr1": 0,
-            "cr2": 0,
-            "cr3": 0,
-            "eflags": 0
-        }
+        self.labels = labels if labels is not None else self.extract_labels()
 
     def extract_labels(self):
-        label_lines = []
-        for l in self.lines:
-            if ':' in l or 'equ' in l:
-                label_lines.append(l)
+        labels = {}
+        for nr, l in enumerate([_strip_line(l) for l in self.lines]):
+            label = None
+            val = -1
 
-        return label_lines
+            if ':' in l:
+                label = l.replace(':', '')
+                val = nr
+            elif 'equ' in l:
+                # extract label
+                idx = l.index(' ')
+                label = l[:idx]
+
+                # parse definition
+                idx = l.index('equ ') + 4
+                stmt = l[idx:].replace('$', str(nr))
+                val = _eval_statement(stmt, labels)
+                # test = ast.parse(decl)
+
+            if label:
+                labels[label] = val
+
+        return labels
 
     def interpret(self, lines=None):
         if lines is None:
@@ -349,7 +358,7 @@ class AsmInterpreter:
         try:
             if any((c in '+-*/') for c in src):
                 try:
-                    val = eval(src)
+                    val = ast.literal_eval(src)
                 except Exception as e:
                     logging.warning("couldn't evaluate expression '{}'"
                                     .format(src))

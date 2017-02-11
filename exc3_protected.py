@@ -206,7 +206,7 @@ class ExerciseHandler:
 
     @staticmethod
     def _read_sourcecode(wd):
-        with open(os.path.join(wd, "protected.asm")) as f:
+        with open(os.path.join(wd, "protected.asm"), encoding='latin-1') as f:
             lines = f.readlines()
         return lines
 
