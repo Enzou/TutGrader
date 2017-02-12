@@ -321,18 +321,21 @@ class AsmInterpreter:
 
         return segments
 
-    def parse_descriptors(self, is_seg_descriptor=True):
-        lines = []
+    def parse_descriptors(self, lines=None, is_seg_descriptor=True):
+        if lines is None:
+            lines = self.lines
+
+        descr_lines = []
         is_define_cmd = False
-        for l in self.lines:
+        for l in lines:
             if "idt:" in l:
                 is_define_cmd = True
             elif "idt_end:" in l:
                 break
             elif is_define_cmd:
-                lines.append(l)
+                descr_lines.append(l)
 
-        descrbytes = _parse_descriptor_defines(lines, self.labels)
+        descrbytes = _parse_descriptor_defines(descr_lines, self.labels)
         bytes_per_entry = 8
         entries = [descrbytes[x:x + bytes_per_entry] for x in
                    range(0, len(descrbytes), bytes_per_entry)]

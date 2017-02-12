@@ -1,6 +1,8 @@
 import os
 import logging
 import shutil
+import functools
+# from functools import partial
 
 from asm_interpreter import AsmInterpreter, _parse_number, _tokenize_line
 
@@ -8,45 +10,79 @@ makefile_src = os.path.join("..", "data", "Makefile_3")
 write_src = os.path.join("..", "data", "write_3.c")
 
 
-def _eval_code_seg(seg):
-    deduced_pts = 0
-    penalties = []
+def _eval_segment(seg, criteria, deduct):
+    explanations = {
+        "seglimit": "Falsches Segmentlimit: {}",
+        "base_addr": "Falsche Basisadresse: {}",
+        "type": "Falscher Segment Typ (type): {}",
+        "s": "Falscher Descriptor Typ (s): {}",
+        "dpl": "Falsches Privileg Level (dpl): {}",
+        "p": "Segment muss praesent sein (p)",
+        "avl": "Segment steht nicht fuer das System zur Verfuegung",
+        "l": "Es handelt sich nicht um ein 64 Bit Segment (l)",
+        "db": "Operation Size muss 32 Bit sein (db)",
+        "g": "Granularität Bit muss gesetzt sein (g)"
+    }
 
-    if not (3071 <= seg["seglimit"] <= 3072):
-        deduced_pts += 1
-        penalties.append("Falsches Segmentlimit: {}".format(seg["seglimit"]))
-    if seg["base_addr"] != 0:
-        deduced_pts += 1
-        penalties.append("Falsche Basisadresse: {}".format(seg["base_addr"]))
-    if seg["type"] not in [10, 11, 14, 15]:
-        deduced_pts += 1
-        penalties.append("Falscher Segment Typ (type): {}".format(seg["type"]))
-    if not seg["s"]:
-        deduced_pts += 1
-        penalties.append("Falscher Descriptor Typ (s): {}".format(seg["s"]))
-    if seg["dpl"] > 1:
-        deduced_pts += 1
-        penalties.append("Falsches Privileg Level (dpl): " + str(seg["dpl"]))
-    if not seg["p"]:
-        deduced_pts += 1
-        penalties.append("Segment muss praesent sein (p)")
-    if seg["avl"]:
-        deduced_pts += 1
-        penalties.append("Segment steht nicht fuer das System zur Verfuegung")
-    if seg["l"]:
-        deduced_pts += 1
-        penalties.append("Es handelt sich nicht um ein 64 Bit Segment (l)")
-    if not seg["db"]:
-        deduced_pts += 1
-        penalties.append("Operation Size muss 32 Bit sein (db)")
-    if not seg["g"]:
-        deduced_pts += 1
-        penalties.append("Granularität Bit muss gesetzt sein (g)")
-
-    return deduced_pts, penalties
+    for k, v in seg.items():
+        if not criteria[k](v):
+            deduct(1, explanations[k].format(v))
 
 
-def _eval_data_seg(seg):
+def _eval_code_seg(seg, deduct_fn):
+    # deduced_pts = 0
+    # penalties = []
+
+    criteria = {
+        "seglimit": lambda x: 3071 <= x <= 3072,
+        "base_addr": lambda x: x == 0,
+        "type": lambda x: x in [10, 11, 14, 15],
+        "s": lambda x: x,
+        "dpl": lambda x: x <= 1,
+        "p": lambda x: x,
+        "avl": lambda x: not x,
+        "l": lambda x: not x,
+        "db": lambda x: x,
+        "g": lambda x: x
+    }
+
+    _eval_segment(seg, criteria, deduct_fn)
+
+    # if not (3071 <= seg["seglimit"] <= 3072):
+    #     deduced_pts += 1
+    #     penalties.append("Falsches Segmentlimit: {}".format(seg["seglimit"]))
+    # if seg["base_addr"] != 0:
+    #     deduced_pts += 1
+    #     penalties.append("Falsche Basisadresse: {}".format(seg["base_addr"]))
+    # if seg["type"] not in [10, 11, 14, 15]:
+    #     deduced_pts += 1
+    #     penalties.append("Falscher Segment Typ (type): {}".format(seg["type"]))
+    # if not seg["s"]:
+    #     deduced_pts += 1
+    #     penalties.append("Falscher Descriptor Typ (s): {}".format(seg["s"]))
+    # if seg["dpl"] > 1:
+    #     deduced_pts += 1
+    #     penalties.append("Falsches Privileg Level (dpl): " + str(seg["dpl"]))
+    # if not seg["p"]:
+    #     deduced_pts += 1
+    #     penalties.append("Segment muss praesent sein (p)")
+    # if seg["avl"]:
+    #     deduced_pts += 1
+    #     penalties.append("Segment steht nicht fuer das System zur Verfuegung")
+    # if seg["l"]:
+    #     deduced_pts += 1
+    #     penalties.append("Es handelt sich nicht um ein 64 Bit Segment (l)")
+    # if not seg["db"]:
+    #     deduced_pts += 1
+    #     penalties.append("Operation Size muss 32 Bit sein (db)")
+    # if not seg["g"]:
+    #     deduced_pts += 1
+    #     penalties.append("Granularität Bit muss gesetzt sein (g)")
+
+    # return deduced_pts, penalties
+
+
+def _eval_data_seg(seg, deduct_fn):
     deduced_pts = 0
     penalties = []
 
@@ -84,7 +120,7 @@ def _eval_data_seg(seg):
     return deduced_pts, penalties
 
 
-def _eval_video_seg(seg):
+def _eval_video_seg(seg, deduct_fn):
     deduced_pts = 0
     penalties = []
 
@@ -173,18 +209,23 @@ def _eval_int_call(lines, int_no):
 
 
 class ExerciseHandler:
+    _max_score = 60
+
     def __init__(self, wd):
         code = self._read_sourcecode(wd)
         self.tasks = self._extract_tasks(code)
         self.asm = AsmInterpreter(code)
+        self.labels = {}
+        self.score = self._max_score
+        self.penalties = {}
 
     @staticmethod
     def get_exercise_name():
         return "Ue3"
 
-    @staticmethod
-    def get_max_score():
-        return 60
+    @classmethod
+    def get_max_score(cls):
+        return cls._max_score
 
     @staticmethod
     def normalize_files(wd):
@@ -241,75 +282,67 @@ class ExerciseHandler:
 
         return lines
 
+    def _deduct_points(self, task, score, pts, explanation):
+        if task not in self.penalties:
+            self.penalties[task] = []
+
+        score -= pts
+        if score < 0:
+            score = 0
+        self.penalties[task].append("[-{}] {}".format(pts, explanation))
+
     def grade_submission(self):
-        total_score = 0
-        penalties = {}
-
         for k, lines in self.tasks.items():
-            score, pens = self._grade_task(k, lines)
-            total_score += score
-            penalties[k] = pens
+            self._grade_task(k, lines)
 
-        return total_score, penalties
+        return self.score, self.penalties
 
     def _grade_task(self, nr, lines):
+        deduct_fn = functools.partial(self._deduct_points, nr)
         if nr == 1:
-            return self._grade_task1(lines)
+            return self._grade_task1(deduct_fn, lines)
         elif nr == 2:
-            return self._grade_task2(lines)
+            return self._grade_task2(deduct_fn, lines)
         elif nr == 3:
-            return self._grade_task3(lines)
+            return self._grade_task3(deduct_fn, lines)
         elif nr == 4:
-            return self._grade_task4(lines)
+            return self._grade_task4(deduct_fn, lines)
         elif nr == 5:
-            return self._grade_task5(lines)
+            return self._grade_task5(deduct_fn, lines)
         elif nr == 7:
-            return self._grade_task7(lines)
+            return self._grade_task7(deduct_fn, lines)
         else:
             return 0, ["Invalid task"]
 
-    def _grade_task1(self, lines):
+    def _grade_task1(self, deduct_fn, lines):
         max_score = 15
-        # segments = {}
-        # seg_name = None
-        # seg_bytes = []
+        deduct_fn = functools.partial(deduct_fn, max_score)
 
         # asm = AsmInterpreter(lines)
         segments = self.asm.parse_segment_descriptors(lines)
 
-        # for l in lines:
-        #     if "equ $-gdt" in l:
-        #         if seg_name:
-        #             segments[seg_name] = _parse_descriptor_defines(seg_bytes)
-        #         seg_name = l[:l.index(" ")]
-        #         seg_bytes.clear()
-        #     elif "gdt_end:" in l:
-        #         segments[seg_name] = _parse_descriptor_defines(seg_bytes)
-        #     elif seg_name:
-        #         seg_bytes.append(l)
+        # penalties = []
 
-        penalties = []
+        _eval_code_seg(segments["code"], deduct_fn)
+        # max_score -= pts
+        # penalties += pens
 
-        pts, pens = _eval_code_seg(segments["code"])
-        max_score -= pts
-        penalties += pens
+        _eval_data_seg(segments["data"], deduct_fn)
+        # max_score -= pts
+        # penalties += pens
 
-        pts, pens = _eval_data_seg(segments["data"])
-        max_score -= pts
-        penalties += pens
-
-        pts, pens = _eval_video_seg(segments["video"])
-        max_score -= pts
-        penalties += pens
+        _eval_video_seg(segments["video"], deduct_fn)
+        # max_score -= pts
+        # penalties += pens
 
         if max_score < 0:
             logging.warning("capped negative score, because it would be {}"
                             .format(max_score))
             max_score = 0
 
-        return max_score, penalties
+        # return max_score, penalties
 
-    def _grade_task2(self, lines):
+    def _grade_task2(self, deduct_fn, lines):
         max_score = 5
         asm = AsmInterpreter(lines)
         res = asm.interpret()
@@ -319,7 +352,7 @@ class ExerciseHandler:
         else:
             return max_score, []
 
-    def _grade_task3(self, lines):
+    def _grade_task3(self, deduct_fn, lines):
         max_score = 10
 
         labels = {
@@ -351,7 +384,7 @@ class ExerciseHandler:
 
         return max_score, penalties
 
-    def _grade_task4(self, lines):
+    def _grade_task4(self, deduct_fn, lines):
         max_score = 20
 
         labels = {
@@ -361,8 +394,8 @@ class ExerciseHandler:
             "interrupthandler1": 180,
             "interrupthandler2": 190
         }
-        asm = AsmInterpreter(lines, labels)
-        descrs = asm.parse_descriptors(is_seg_descriptor=False)
+        # asm = AsmInterpreter(lines, labels)
+        descrs = self.asm.parse_descriptors(lines, is_seg_descriptor=False)
 
         penalties = []
         if len(descrs) < 3:
@@ -397,7 +430,7 @@ class ExerciseHandler:
 
         return max_score, penalties
 
-    def _grade_task5(self, lines):
+    def _grade_task5(self, deduct_fn, lines):
         max_score = 5
         penalties = []
 
@@ -417,7 +450,7 @@ class ExerciseHandler:
 
         return max_score, penalties
 
-    def _grade_task7(self, lines):
+    def _grade_task7(self, deduct_fn, lines):
         max_score = 5
         penalties = []
 
